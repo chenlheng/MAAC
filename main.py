@@ -10,6 +10,7 @@ from utils.make_env import make_env
 from utils.buffer import ReplayBuffer
 from utils.env_wrappers import SubprocVecEnv, DummyVecEnv
 from algorithms.attention_sac import AttentionSAC
+import pickle
 
 
 def make_parallel_env(env_id, n_rollout_threads, seed):
@@ -60,14 +61,18 @@ def run(config):
                                  [acsp.shape[0] if isinstance(acsp, Box) else acsp.n
                                   for acsp in env.action_space])
     t = 0
+    episode_rewards = []
+    final_ep_rewards = []
     for ep_i in range(0, config.n_episodes, config.n_rollout_threads):
-        print("Episodes %i-%i of %i" % (ep_i + 1,
-                                        ep_i + 1 + config.n_rollout_threads,
-                                        config.n_episodes))
+        # print("Episodes %i-%i of %i" % (ep_i + 1,
+        #                                 ep_i + 1 + config.n_rollout_threads,
+        #                                 config.n_episodes))
         obs = env.reset()
         model.prep_rollouts(device='cpu')
+        rollouts_rewards = np.zeros((config.n_rollout_threads,))
 
         for et_i in range(config.episode_length):
+
             # rearrange observations to be per agent, and convert to torch Variable
             torch_obs = [Variable(torch.Tensor(np.vstack(obs[:, i])),
                                   requires_grad=False)
@@ -75,10 +80,13 @@ def run(config):
             # get actions as torch Variables
             torch_agent_actions = model.step(torch_obs, explore=True)
             # convert actions to numpy arrays
-            agent_actions = [ac.data.numpy() for ac in torch_agent_actions]
+            agent_actions = [ac.data.numpy() for ac in torch_agent_actions]  # discrete actions
             # rearrange actions to be per environment
             actions = [[ac[i] for ac in agent_actions] for i in range(config.n_rollout_threads)]
             next_obs, rewards, dones, infos = env.step(actions)
+            # print('rewards', rewards.shape, rewards)
+            rollouts_rewards += np.sum(rewards, axis=-1)  # from svrl
+            # episode_rewards[-1] += np.sum(rewards)  # from svrl
             replay_buffer.push(obs, agent_actions, rewards, next_obs, dones)
             obs = next_obs
             t += config.n_rollout_threads
@@ -95,16 +103,28 @@ def run(config):
                     model.update_policies(sample, logger=logger)
                     model.update_all_targets()
                 model.prep_rollouts(device='cpu')
+
+        episode_rewards += list(rollouts_rewards)
+        # print(episode_rewards)
         ep_rews = replay_buffer.get_average_rewards(
             config.episode_length * config.n_rollout_threads)
         for a_i, a_ep_rew in enumerate(ep_rews):
             logger.add_scalar('agent%i/mean_episode_rewards' % a_i, a_ep_rew, ep_i)
+            # print('agent%i/mean_episode_rewards' % a_i, a_ep_rew, ep_i)
+
+        if len(episode_rewards) % config.save_interval < config.n_rollout_threads:  # from svrl; save-rate = 1000
+            final_ep_rewards.append(np.mean(episode_rewards[-config.save_interval:]))
+            print(ep_i, final_ep_rewards[-1])
 
         if ep_i % config.save_interval < config.n_rollout_threads:
             model.prep_rollouts(device='cpu')
             os.makedirs(run_dir / 'incremental', exist_ok=True)
             model.save(run_dir / 'incremental' / ('model_ep%i.pt' % (ep_i + 1)))
             model.save(run_dir / 'model.pt')
+
+    rew_file_name = '%s%s/exp_rewards.pkl' % (config.model_name, config.no)  # from svrl
+    with open(rew_file_name, 'wb') as fp:
+        pickle.dump(final_ep_rewards, fp)
 
     model.save(run_dir / 'model.pt')
     env.close()
@@ -114,13 +134,15 @@ def run(config):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("env_id", help="Name of environment")
-    parser.add_argument("model_name",
+    parser.add_argument("--env_id", help="Name of environment",
+                        default='multi_speaker_listener', type=str)
+    parser.add_argument("--model_name",
                         help="Name of directory to store " +
-                             "model/training contents")
+                             "model/training contents",
+                        default='/home/lhchen/nas/svrl/res/simple_spread_3/maac/', type=str)
     parser.add_argument("--n_rollout_threads", default=12, type=int)
     parser.add_argument("--buffer_length", default=int(1e6), type=int)
-    parser.add_argument("--n_episodes", default=50000, type=int)
+    parser.add_argument("--n_episodes", default=60000, type=int)
     parser.add_argument("--episode_length", default=25, type=int)
     parser.add_argument("--steps_per_update", default=100, type=int)
     parser.add_argument("--num_updates", default=4, type=int,
@@ -138,6 +160,7 @@ if __name__ == '__main__':
     parser.add_argument("--gamma", default=0.99, type=float)
     parser.add_argument("--reward_scale", default=100., type=float)
     parser.add_argument("--use_gpu", action='store_true')
+    parser.add_argument("--no", type=str, default='test')
 
     config = parser.parse_args()
 

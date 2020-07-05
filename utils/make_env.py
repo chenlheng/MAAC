@@ -56,6 +56,7 @@ def make_env(scenario_name, benchmark=False, discrete_action=False):
         env = MultiAgentEnv(world, reset_callback=scenario.reset_world,
                             reward_callback=scenario.reward,
                             observation_callback=scenario.observation,
-                            post_step_callback=post_step,
-                            discrete_action=discrete_action)
+                            # post_step_callback=post_step,
+                            # discrete_action=discrete_action
+                            )
     return env
