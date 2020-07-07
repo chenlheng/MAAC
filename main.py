@@ -44,9 +44,13 @@ def run(config):
     os.makedirs(log_dir)
     logger = SummaryWriter(str(log_dir))
 
-    torch.manual_seed(run_num)
-    np.random.seed(run_num)
     env = make_parallel_env(config.env_id, config.n_rollout_threads, run_num)
+
+    # from svrl
+    torch.manual_seed(config.seed)
+    np.random.seed(config.seed)
+    # env.seed(config.seed)
+
     model = AttentionSAC.init_from_env(env,
                                        tau=config.tau,
                                        pi_lr=config.pi_lr,
@@ -122,7 +126,11 @@ def run(config):
             model.save(run_dir / 'incremental' / ('model_ep%i.pt' % (ep_i + 1)))
             model.save(run_dir / 'model.pt')
 
-    rew_file_name = '%s%s/exp_rewards.pkl' % (config.model_name, config.no)  # from svrl
+    # from svrl
+    rew_path = '%s%s/' % (config.model_name, config.no)
+    if not os.path.exists(rew_path):
+        os.mkdir(rew_path)
+    rew_file_name = rew_path + 'exp_rewards.pkl'
     with open(rew_file_name, 'wb') as fp:
         pickle.dump(final_ep_rewards, fp)
 
@@ -159,6 +167,7 @@ if __name__ == '__main__':
     parser.add_argument("--tau", default=0.001, type=float)
     parser.add_argument("--gamma", default=0.99, type=float)
     parser.add_argument("--reward_scale", default=100., type=float)
+    parser.add_argument("--seed", default=0, type=int)
     parser.add_argument("--use_gpu", action='store_true')
     parser.add_argument("--no", type=str, default='test')
 
